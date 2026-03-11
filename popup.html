@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <header>
+      <div class="search-row">
+        <input type="text" id="search-input" placeholder="Search history..." />
+        <button id="delete-btn" class="danger">Delete Selected</button>
+      </div>
+      <div class="filter-row">
+        <input type="date" id="date-start" />
+        <span>to</span>
+        <input type="date" id="date-end" />
+        <button id="clear-filters">Clear Filters</button>
+      </div>
+      <div class="select-row">
+        <input type="checkbox" id="select-all" />
+        <label for="select-all">Select All Visible</label>
+      </div>
+    </header>
+
+    <main id="history-container">
+      <ul id="history-list"></ul>
+    </main>
+    <div id="loading-overlay">
+      <div class="overlay-content">
+        <div id="status-text">Deleting...</div>
+        <button id="cancel-delete-btn" class="secondary">Cancel</button>
+      </div>
+    </div>
+
+    <script src="popup.js"></script>
+  </body>
+</html>

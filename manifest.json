@@ -1,0 +1,11 @@
+{
+  "manifest_version": 3,
+  "name": "Historian",
+  "version": "1.0",
+  "permissions": ["history"],
+  "sidebar_action": {
+    "default_panel": "popup.html",
+    "default_title": "Historian the History Manager",
+    "open_at_install": true
+  }
+}
