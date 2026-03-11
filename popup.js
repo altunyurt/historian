@@ -10,68 +10,16 @@ const cancelBtn = document.getElementById("cancel-delete-btn");
 const statusText = document.getElementById("status-text");
 
 let isCancelling = false;
-
-// Concurrency-limited Promise.all — fires `limit` deletions at a time
-async function deleteWithConcurrency(urls, limit, onProgress) {
-  let completed = 0;
-  let index = 0;
-
-  async function next() {
-    while (index < urls.length) {
-      if (isCancelling) return;
-      const url = urls[index++];
-      await browser.history.deleteUrl({ url });
-      completed++;
-      onProgress(completed, urls.length);
-    }
-  }
-
-  // Spawn `limit` parallel workers
-  const workers = Array.from({ length: Math.min(limit, urls.length) }, next);
-  await Promise.all(workers);
-}
-
-async function deleteSelected() {
-  const checks = document.querySelectorAll(".item-check:checked");
-  const urls = Array.from(checks).map((c) => c.value);
-
-  if (!urls.length) return;
-  if (!confirm(`Delete ${urls.length} items?`)) return;
-
-  isCancelling = false;
-  cancelBtn.disabled = false;
-  overlay.classList.add("active");
-  statusText.textContent = "Deleting... 0%";
-
-  await deleteWithConcurrency(urls, 100, (done, total) => {
-    const pct = Math.round((done / total) * 100);
-    statusText.textContent = `Deleting... ${pct}%`;
-  });
-
-  if (isCancelling) {
-    statusText.textContent = "Cancelled.";
-  }
-
-  overlay.classList.remove("active");
-  cancelBtn.disabled = false; // reset for next run
-  refreshHistory();
-}
-
-cancelBtn.addEventListener("click", () => {
-  isCancelling = true;
-  statusText.textContent = "Cancelling...";
-  cancelBtn.disabled = true;
-});
-
-deleteBtn.addEventListener("click", deleteSelected);
+let currentItems = []; // Absolute truth: stores full objects from latest search
 
 async function refreshHistory() {
-  // Fix: append T00:00:00 to force local time parsing, not UTC
-  const start = dateStart.value ? new Date(dateStart.value + "T00:00:00").getTime() : 0;
-  const end = dateEnd.value ? new Date(dateEnd.value + "T23:59:59").getTime() : Date.now();
+  const query = searchInput.value;
+  const start = dateStart.value ? new Date(dateStart.value).getTime() : 0;
+  const end = dateEnd.value ? new Date(dateEnd.value).setHours(23, 59, 59, 999) : Date.now();
 
-  const items = await browser.history.search({
-    text: searchInput.value,
+  // Fetch items and store them globally for reference during deletion
+  currentItems = await browser.history.search({
+    text: query,
     startTime: start,
     endTime: end,
     maxResults: 1000,
@@ -81,21 +29,18 @@ async function refreshHistory() {
   historyList.innerHTML = "";
   selectAll.checked = false;
 
-  items.forEach((item) => {
+  currentItems.forEach((item, index) => {
     const li = document.createElement("li");
-
-    // Fix: no innerHTML with user data — XSS safe
     const checkbox = document.createElement("input");
     checkbox.type = "checkbox";
     checkbox.className = "item-check";
-    checkbox.value = item.url;
+    checkbox.dataset.index = index; // Link UI to the currentItems array index
 
     const textDiv = document.createElement("div");
     textDiv.className = "text-content";
 
     const titleSpan = document.createElement("span");
     titleSpan.className = "title";
-    titleSpan.title = item.title || "";
     titleSpan.textContent = item.title || "No Title";
 
     const urlSpan = document.createElement("span");
@@ -112,13 +57,90 @@ async function refreshHistory() {
   historyList.appendChild(fragment);
 }
 
-let debounceTimer;
-const handleInput = () => {
-  clearTimeout(debounceTimer);
-  debounceTimer = setTimeout(refreshHistory, 150);
-};
+async function deleteSelected() {
+  const checks = document.querySelectorAll(".item-check:checked");
+  if (!checks.length) return;
 
-[searchInput, dateStart, dateEnd].forEach((el) => el.addEventListener("input", handleInput));
+  // Map checkboxes back to full HistoryItem objects
+  const selectedItems = Array.from(checks)
+    .map((c) => currentItems[parseInt(c.dataset.index)])
+    .sort((a, b) => a.lastVisitTime - b.lastVisitTime); // Sort Ascending for range logic
+
+  if (!confirm(`Delete ${selectedItems.length} items?`)) return;
+
+  isCancelling = false;
+  overlay.classList.add("active");
+
+  let i = 0;
+  while (i < selectedItems.length) {
+    if (isCancelling) break;
+
+    let j = i;
+    // Attempt to expand range
+    while (j + 1 < selectedItems.length) {
+      const startT = selectedItems[j].lastVisitTime;
+      const endT = selectedItems[j + 1].lastVisitTime;
+
+      // Verification Step: Check the DB for unselected items in this gap
+      const gapCheck = await browser.history.search({
+        text: "",
+        startTime: startT,
+        endTime: endT,
+        maxResults: 10, // Small buffer to find interlopers
+      });
+
+      // Filter out items already in our selection to see if anything "alien" remains
+      const selectedUrls = new Set(selectedItems.map((item) => item.url));
+      const interlopers = gapCheck.filter((item) => !selectedUrls.has(item.url));
+
+      if (interlopers.length === 0) {
+        j++; // No unselected items in gap, expand range
+      } else {
+        break; // Unselected item found, stop range expansion
+      }
+    }
+
+    if (j > i) {
+      // Range is verified safe: delete the block
+      console.info("deleting range", {
+        startTime: selectedItems[i].lastVisitTime - 1, // Buffers ensure inclusive deletion
+        endTime: selectedItems[j].lastVisitTime + 1,
+        num_items: j - i,
+      });
+      await browser.history.deleteRange({
+        startTime: selectedItems[i].lastVisitTime - 1, // Buffers ensure inclusive deletion
+        endTime: selectedItems[j].lastVisitTime + 1,
+      });
+      i = j + 1;
+    } else {
+      // No safe range: delete individual URL
+      // console.info("deleting single", { url: selectedItems[i].url });
+      await browser.history.deleteUrl({ url: selectedItems[i].url });
+      i++;
+    }
+
+    statusText.textContent = `Processing... ${Math.round((i / selectedItems.length) * 100)}%`;
+  }
+
+  overlay.classList.remove("active");
+  refreshHistory();
+}
+
+// Event Listeners
+cancelBtn.addEventListener("click", () => {
+  isCancelling = true;
+  statusText.textContent = "Cancelling...";
+});
+
+deleteBtn.addEventListener("click", deleteSelected);
+
+let debounceTimer;
+[searchInput, dateStart, dateEnd].forEach((el) => {
+  el.addEventListener("input", () => {
+    clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(refreshHistory, 150);
+  });
+});
 
 clearBtn.addEventListener("click", () => {
   searchInput.value = "";
