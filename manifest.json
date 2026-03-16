@@ -2,11 +2,26 @@
   "manifest_version": 3,
   "name": "Historian",
   "version": "1.0",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "historian@altunyurt",
+      "data_collection_permissions": {
+        "required": ["none"]
+      }
+    }
+  },
   "permissions": ["history"],
   "sidebar_action": {
     "default_panel": "popup.html",
     "default_title": "Historian the History Manager",
     "open_at_install": true
+  },
+  "action": {
+    "default_title": "Historian the History Manager",
+    "default_icon": {"16": "icon.svg", "32": "icon.svg"}
+  },
+  "background": {
+    "scripts": ["background.js"]
   },
   "icons": {
       "16": "icon.svg",
