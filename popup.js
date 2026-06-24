@@ -214,6 +214,25 @@ async function deleteSelected() {
         done += count;
         statusText.textContent = `Deleting... ${Math.round((done / total) * 100)}%`;
       }
+
+      // Text filter may have excluded some selected items from dbItems
+      if (done < total) {
+        const foundInDb = new Set(
+          dbItems.filter((x) => selectedUrls.has(x.url)).map((x) => x.url)
+        );
+        for (const item of selected) {
+          if (isCancelling) break;
+          if (!foundInDb.has(item.url)) {
+            console.warn("item missing from DB results, deleting individually", item.url);
+            try { await browser.history.deleteUrl({ url: item.url }); }
+            catch (e) { console.error("deleteUrl failed", item.url, e); }
+            try { await browser.history.deleteRange({ startTime: item.lastVisitTime - 1, endTime: item.lastVisitTime + 1 }); }
+            catch (e) { console.error("deleteRange failed", e); }
+            done++;
+          }
+        }
+        statusText.textContent = `Deleting... ${Math.round((done / total) * 100)}%`;
+      }
     }
 
     if (!isCancelling) {
