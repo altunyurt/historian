@@ -86,57 +86,60 @@ async function deleteSelected() {
   isDeleting = true;
   overlay.classList.add("active");
 
-  // Sort full visible set by time ascending — single in-memory pass, zero API calls
-  const sorted = [...currentItems].sort((a, b) => a.lastVisitTime - b.lastVisitTime);
+  try {
+    // Sort full visible set by time ascending — single in-memory pass, zero API calls
+    const sorted = [...currentItems].sort((a, b) => a.lastVisitTime - b.lastVisitTime);
 
-  // Build contiguous selected blocks
-  const blocks = [];
-  let blockStart = -1;
-  for (let k = 0; k < sorted.length; k++) {
-    if (selectedUrls.has(sorted[k].url)) {
-      if (blockStart === -1) blockStart = k;
-    } else {
-      if (blockStart !== -1) {
-        blocks.push({ start: blockStart, end: k - 1 });
-        blockStart = -1;
+    // Build contiguous selected blocks
+    const blocks = [];
+    let blockStart = -1;
+    for (let k = 0; k < sorted.length; k++) {
+      if (selectedUrls.has(sorted[k].url)) {
+        if (blockStart === -1) blockStart = k;
+      } else {
+        if (blockStart !== -1) {
+          blocks.push({ start: blockStart, end: k - 1 });
+          blockStart = -1;
+        }
       }
     }
-  }
-  if (blockStart !== -1) {
-    blocks.push({ start: blockStart, end: sorted.length - 1 });
-  }
-
-  // Delete each block
-  let done = 0;
-  for (let b = 0; b < blocks.length; b++) {
-    if (isCancelling) break;
-
-    const { start: si, end: ei } = blocks[b];
-    const count = ei - si + 1;
-
-    if (count === 1) {
-      try {
-        await browser.history.deleteUrl({ url: sorted[si].url });
-      } catch (err) {
-        console.error("deleteUrl failed", sorted[si].url, err);
-      }
-    } else {
-      const t0 = sorted[si].lastVisitTime;
-      const t1 = sorted[ei].lastVisitTime;
-      console.info("deleting range", { startTime: t0, endTime: t1, count });
-      try {
-        await browser.history.deleteRange({ startTime: t0 - 1, endTime: t1 + 1 });
-      } catch (err) {
-        console.error("deleteRange failed", err, { startTime: t0, endTime: t1 });
-      }
+    if (blockStart !== -1) {
+      blocks.push({ start: blockStart, end: sorted.length - 1 });
     }
 
-    done += count;
-    statusText.textContent = `Processing... ${Math.round((done / selectedUrls.size) * 100)}%`;
+    // Delete each block
+    let done = 0;
+    for (let b = 0; b < blocks.length; b++) {
+      if (isCancelling) break;
+
+      const { start: si, end: ei } = blocks[b];
+      const count = ei - si + 1;
+
+      if (count === 1) {
+        try {
+          await browser.history.deleteUrl({ url: sorted[si].url });
+        } catch (err) {
+          console.error("deleteUrl failed", sorted[si].url, err);
+        }
+      } else {
+        const t0 = sorted[si].lastVisitTime;
+        const t1 = sorted[ei].lastVisitTime;
+        console.info("deleting range", { startTime: t0, endTime: t1, count });
+        try {
+          await browser.history.deleteRange({ startTime: t0 - 1, endTime: t1 + 1 });
+        } catch (err) {
+          console.error("deleteRange failed", err, { startTime: t0, endTime: t1 });
+        }
+      }
+
+      done += count;
+      statusText.textContent = `Processing... ${Math.round((done / selectedUrls.size) * 100)}%`;
+    }
+  } finally {
+    overlay.classList.remove("active");
+    isDeleting = false;
   }
 
-  overlay.classList.remove("active");
-  isDeleting = false;
   await refreshHistory();
 }
 
