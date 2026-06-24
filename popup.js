@@ -86,6 +86,8 @@ async function deleteSelected() {
   isDeleting = true;
   overlay.classList.add("active");
 
+  const selectedUrls = new Set(selectedItems.map((item) => item.url));
+
   let i = 0;
   while (i < selectedItems.length) {
     if (isCancelling) break;
@@ -101,15 +103,14 @@ async function deleteSelected() {
         text: "",
         startTime: startT,
         endTime: endT,
-        maxResults: 100,
+        maxResults: 10,
       });
 
-      if (gapCheck.length >= 100) {
+      if (gapCheck.length >= 10) {
         console.warn("gap check hit maxResults", { startT, endT, gapLen: gapCheck.length });
       }
 
       // Filter out items already in our selection to see if anything "alien" remains
-      const selectedUrls = new Set(selectedItems.map((item) => item.url));
       const interlopers = gapCheck.filter((item) => !selectedUrls.has(item.url));
 
       if (interlopers.length === 0) {
@@ -152,10 +153,6 @@ async function deleteSelected() {
     statusText.textContent = `Processing... ${Math.round((i / selectedItems.length) * 100)}%`;
   }
 
-  if (!isCancelling) {
-    statusText.textContent = "Done.";
-    await new Promise((r) => setTimeout(r, 800));
-  }
   overlay.classList.remove("active");
   isDeleting = false;
   await refreshHistory();
