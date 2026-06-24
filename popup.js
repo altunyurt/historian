@@ -109,13 +109,18 @@ async function deleteSelected() {
 
     // Delete each block
     let done = 0;
+    const total = selectedUrls.size;
+    statusText.textContent = `Deleting... 0/${total}`;
+
     for (let b = 0; b < blocks.length; b++) {
       if (isCancelling) break;
 
       const { start: si, end: ei } = blocks[b];
       const count = ei - si + 1;
+      const pct = Math.round((done / total) * 100);
 
       if (count === 1) {
+        statusText.textContent = `Deleting... ${pct}% (${done}/${total})`;
         try {
           await browser.history.deleteUrl({ url: sorted[si].url });
         } catch (err) {
@@ -125,6 +130,7 @@ async function deleteSelected() {
         const t0 = sorted[si].lastVisitTime;
         const t1 = sorted[ei].lastVisitTime;
         console.info("deleting range", { startTime: t0, endTime: t1, count });
+        statusText.textContent = `Deleting range of ${count}... ${pct}%`;
         try {
           await browser.history.deleteRange({ startTime: t0 - 1, endTime: t1 + 1 });
         } catch (err) {
@@ -133,7 +139,7 @@ async function deleteSelected() {
       }
 
       done += count;
-      statusText.textContent = `Processing... ${Math.round((done / selectedUrls.size) * 100)}%`;
+      statusText.textContent = `Deleting... ${Math.round((done / total) * 100)}% (${done}/${total})`;
     }
   } finally {
     overlay.classList.remove("active");
