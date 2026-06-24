@@ -10,20 +10,34 @@ const cancelBtn = document.getElementById("cancel-delete-btn");
 const statusText = document.getElementById("status-text");
 
 let isCancelling = false;
-let currentItems = []; // Absolute truth: stores full objects from latest search
+let isDeleting = false;
+let currentItems = [];
+let refreshId = 0; // Abort stale searches
 
 async function refreshHistory() {
+  if (isDeleting) return; // Don't clobber during delete
+
   const query = searchInput.value;
   const start = dateStart.value ? new Date(dateStart.value).getTime() : 0;
   const end = dateEnd.value ? new Date(dateEnd.value).setHours(23, 59, 59, 999) : Date.now();
 
-  // Fetch items and store them globally for reference during deletion
-  currentItems = await browser.history.search({
-    text: query,
-    startTime: start,
-    endTime: end,
-    maxResults: 1000,
-  });
+  const thisId = ++refreshId;
+  let items;
+  try {
+    items = await browser.history.search({
+      text: query,
+      startTime: start,
+      endTime: end,
+      maxResults: 1000,
+    });
+  } catch (err) {
+    console.error("history.search failed", err);
+    return;
+  }
+
+  if (thisId !== refreshId) return; // Stale request
+
+  currentItems = items;
 
   const fragment = document.createDocumentFragment();
   historyList.innerHTML = "";
@@ -34,7 +48,7 @@ async function refreshHistory() {
     const checkbox = document.createElement("input");
     checkbox.type = "checkbox";
     checkbox.className = "item-check";
-    checkbox.dataset.index = index; // Link UI to the currentItems array index
+    checkbox.dataset.index = index;
 
     const textDiv = document.createElement("div");
     textDiv.className = "text-content";
@@ -69,6 +83,7 @@ async function deleteSelected() {
   if (!confirm(`Delete ${selectedItems.length} items?`)) return;
 
   isCancelling = false;
+  isDeleting = true;
   overlay.classList.add("active");
 
   let i = 0;
@@ -86,8 +101,12 @@ async function deleteSelected() {
         text: "",
         startTime: startT,
         endTime: endT,
-        maxResults: 10, // Small buffer to find interlopers
+        maxResults: 100,
       });
+
+      if (gapCheck.length >= 100) {
+        console.warn("gap check hit maxResults", { startT, endT, gapLen: gapCheck.length });
+      }
 
       // Filter out items already in our selection to see if anything "alien" remains
       const selectedUrls = new Set(selectedItems.map((item) => item.url));
@@ -103,27 +122,43 @@ async function deleteSelected() {
     if (j > i) {
       // Range is verified safe: delete the block
       console.info("deleting range", {
-        startTime: selectedItems[i].lastVisitTime - 1, // Buffers ensure inclusive deletion
+        startTime: selectedItems[i].lastVisitTime - 1,
         endTime: selectedItems[j].lastVisitTime + 1,
-        num_items: j - i,
+        num_items: j - i + 1,
+        urls: selectedItems.slice(i, j + 1).map((x) => x.url),
       });
-      await browser.history.deleteRange({
-        startTime: selectedItems[i].lastVisitTime - 1, // Buffers ensure inclusive deletion
-        endTime: selectedItems[j].lastVisitTime + 1,
-      });
+      try {
+        await browser.history.deleteRange({
+          startTime: selectedItems[i].lastVisitTime - 1,
+          endTime: selectedItems[j].lastVisitTime + 1,
+        });
+      } catch (err) {
+        console.error("deleteRange failed", err, {
+          startTime: selectedItems[i].lastVisitTime,
+          endTime: selectedItems[j].lastVisitTime,
+        });
+      }
       i = j + 1;
     } else {
       // No safe range: delete individual URL
-      // console.info("deleting single", { url: selectedItems[i].url });
-      await browser.history.deleteUrl({ url: selectedItems[i].url });
+      try {
+        await browser.history.deleteUrl({ url: selectedItems[i].url });
+      } catch (err) {
+        console.error("deleteUrl failed", selectedItems[i].url, err);
+      }
       i++;
     }
 
     statusText.textContent = `Processing... ${Math.round((i / selectedItems.length) * 100)}%`;
   }
 
+  if (!isCancelling) {
+    statusText.textContent = "Done.";
+    await new Promise((r) => setTimeout(r, 800));
+  }
   overlay.classList.remove("active");
-  refreshHistory();
+  isDeleting = false;
+  await refreshHistory();
 }
 
 // Event Listeners
