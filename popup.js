@@ -121,17 +121,28 @@ async function deleteSelected() {
       });
 
       if (total === 1) {
+        const item = dbItems[0];
         statusText.textContent = "Deleting...";
-        try {
-          await browser.history.deleteUrl({ url: dbItems[0].url });
-          console.info("deleteUrl succeeded for", dbItems[0].url);
-        } catch (err) {
-          console.error("deleteUrl failed", dbItems[0].url, err, "→ trying deleteRange");
-          try {
-            await browser.history.deleteRange({ startTime: rangeStart - 1, endTime: rangeEnd + 1 });
-          } catch (err2) {
-            console.error("deleteRange also failed", err2);
-          }
+        console.info("deleting single", { url: item.url, time: rangeStart });
+
+        // Try both methods — deleteUrl may succeed without actually deleting
+        let urlErr, rangeErr;
+        try { await browser.history.deleteUrl({ url: item.url }); }
+        catch (e) { urlErr = e; }
+        try { await browser.history.deleteRange({ startTime: rangeStart - 1, endTime: rangeEnd + 1 }); }
+        catch (e) { rangeErr = e; }
+
+        if (urlErr) console.error("deleteUrl failed", item.url, urlErr);
+        if (rangeErr) console.error("deleteRange failed", rangeErr);
+
+        // Verify
+        const verify = await browser.history.search({
+          text: "", startTime: rangeStart, endTime: rangeEnd, maxResults: 1,
+        });
+        if (verify.length > 0 && verify[0].url === item.url) {
+          console.warn("ITEM SURVIVED both methods", verify[0]);
+        } else {
+          console.info("item deleted, verified");
         }
       } else {
         statusText.textContent = `Deleting all ${total}...`;
