@@ -108,11 +108,22 @@ async function deleteSelected() {
     if (dbItems.length >= 100000) {
       console.warn("DB fetch truncated at maxResults", rangeStart, rangeEnd);
     }
+    console.info("deleteSelected fetch", { rangeStart, rangeEnd, total, dbLen: dbItems.length });
 
     // Sort DB result by time ascending for linear scan
     dbItems.sort((a, b) => a.lastVisitTime - b.lastVisitTime);
 
-    if (dbItems.length === total) {
+    if (dbItems.length === 0) {
+      // DB returned nothing for this range — delete individually
+      console.warn("DB fetch empty, using per-item delete", { rangeStart, rangeEnd, total });
+      for (const item of selected) {
+        if (isCancelling) break;
+        try { await browser.history.deleteUrl({ url: item.url }); }
+        catch (e) { console.error("deleteUrl failed", item.url, e); }
+        try { await browser.history.deleteRange({ startTime: item.lastVisitTime - 1, endTime: item.lastVisitTime + 1 }); }
+        catch (e) { console.error("deleteRange failed", e); }
+      }
+    } else if (dbItems.length === total) {
       // Exact match: selection covers every item in time range → nuke it all
       console.info("deleting full range (exact match)", {
         startTime: rangeStart,
