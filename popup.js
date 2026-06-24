@@ -95,11 +95,11 @@ async function deleteSelected() {
     const rangeStart = selected[0].lastVisitTime;
     const rangeEnd = selected[selected.length - 1].lastVisitTime;
 
-    // Fetch everything in that time range — no text filter, need all items
-    // for accurate count comparison and interloper detection
+    // Fetch everything in that time range with same text filter as the view
+    const query = searchInput.value;
     statusText.textContent = "Fetching...";
     const dbItems = await browser.history.search({
-      text: "",
+      text: query,
       startTime: rangeStart,
       endTime: rangeEnd,
       maxResults: 100000,
