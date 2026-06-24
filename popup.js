@@ -15,18 +15,17 @@ let currentItems = [];
 let refreshId = 0; // Abort stale searches
 
 async function refreshHistory() {
-  if (isDeleting) return;
+  if (isDeleting) return; // Don't clobber during delete
 
-  const query = searchInput.value.trim().toLowerCase();
+  const query = searchInput.value;
   const start = dateStart.value ? new Date(dateStart.value).getTime() : 0;
   const end = dateEnd.value ? new Date(dateEnd.value).setHours(23, 59, 59, 999) : Date.now();
 
   const thisId = ++refreshId;
-  let allItems;
+  let items;
   try {
-    // Fetch all items in range (no text filter — Firefox text index is capped)
-    allItems = await browser.history.search({
-      text: "",
+    items = await browser.history.search({
+      text: query,
       startTime: start,
       endTime: end,
       maxResults: 1000,
@@ -36,16 +35,7 @@ async function refreshHistory() {
     return;
   }
 
-  if (thisId !== refreshId) return;
-
-  // Client-side text filter (URL + title substring match)
-  const items = query
-    ? allItems.filter(
-        (item) =>
-          item.url.toLowerCase().includes(query) ||
-          (item.title || "").toLowerCase().includes(query)
-      )
-    : allItems;
+  if (thisId !== refreshId) return; // Stale request
 
   currentItems = items;
 
@@ -105,10 +95,11 @@ async function deleteSelected() {
     const rangeStart = selected[0].lastVisitTime;
     const rangeEnd = selected[selected.length - 1].lastVisitTime;
 
-    // Fetch everything in that time range (no text filter — get all items)
+    // Fetch everything in that time range with same text filter as the view
+    const query = searchInput.value;
     statusText.textContent = "Fetching...";
     const dbItems = await browser.history.search({
-      text: "",
+      text: query,
       startTime: rangeStart,
       endTime: rangeEnd,
       maxResults: 100000,
