@@ -87,59 +87,73 @@ async function deleteSelected() {
   overlay.classList.add("active");
 
   try {
-    // Sort full visible set by time ascending — single in-memory pass, zero API calls
-    const sorted = [...currentItems].sort((a, b) => a.lastVisitTime - b.lastVisitTime);
-
-    // Build contiguous selected blocks
-    const blocks = [];
-    let blockStart = -1;
-    for (let k = 0; k < sorted.length; k++) {
-      if (selectedUrls.has(sorted[k].url)) {
-        if (blockStart === -1) blockStart = k;
-      } else {
-        if (blockStart !== -1) {
-          blocks.push({ start: blockStart, end: k - 1 });
-          blockStart = -1;
-        }
-      }
-    }
-    if (blockStart !== -1) {
-      blocks.push({ start: blockStart, end: sorted.length - 1 });
-    }
-
-    // Delete each block
-    let done = 0;
     const total = selectedUrls.size;
-    statusText.textContent = `Deleting... 0/${total}`;
 
-    for (let b = 0; b < blocks.length; b++) {
-      if (isCancelling) break;
+    // All visible selected → nuke entire time range including invisible gap items
+    if (selectedUrls.size === currentItems.length && currentItems.length > 0) {
+      const sorted = [...currentItems].sort((a, b) => a.lastVisitTime - b.lastVisitTime);
+      const t0 = sorted[0].lastVisitTime;
+      const t1 = sorted[sorted.length - 1].lastVisitTime;
+      console.info("deleting full range", { startTime: t0, endTime: t1, count: total });
+      statusText.textContent = `Deleting all ${total}...`;
+      try {
+        await browser.history.deleteRange({ startTime: t0 - 1, endTime: t1 + 1 });
+      } catch (err) {
+        console.error("deleteRange failed", err, { startTime: t0, endTime: t1 });
+      }
+      statusText.textContent = `Deleted ${total} items.`;
+    } else {
+      // Selective delete: build contiguous blocks, skip unselected gaps
+      const sorted = [...currentItems].sort((a, b) => a.lastVisitTime - b.lastVisitTime);
 
-      const { start: si, end: ei } = blocks[b];
-      const count = ei - si + 1;
-      const pct = Math.round((done / total) * 100);
-
-      if (count === 1) {
-        statusText.textContent = `Deleting... ${pct}% (${done}/${total})`;
-        try {
-          await browser.history.deleteUrl({ url: sorted[si].url });
-        } catch (err) {
-          console.error("deleteUrl failed", sorted[si].url, err);
-        }
-      } else {
-        const t0 = sorted[si].lastVisitTime;
-        const t1 = sorted[ei].lastVisitTime;
-        console.info("deleting range", { startTime: t0, endTime: t1, count });
-        statusText.textContent = `Deleting range of ${count}... ${pct}%`;
-        try {
-          await browser.history.deleteRange({ startTime: t0 - 1, endTime: t1 + 1 });
-        } catch (err) {
-          console.error("deleteRange failed", err, { startTime: t0, endTime: t1 });
+      const blocks = [];
+      let blockStart = -1;
+      for (let k = 0; k < sorted.length; k++) {
+        if (selectedUrls.has(sorted[k].url)) {
+          if (blockStart === -1) blockStart = k;
+        } else {
+          if (blockStart !== -1) {
+            blocks.push({ start: blockStart, end: k - 1 });
+            blockStart = -1;
+          }
         }
       }
+      if (blockStart !== -1) {
+        blocks.push({ start: blockStart, end: sorted.length - 1 });
+      }
 
-      done += count;
-      statusText.textContent = `Deleting... ${Math.round((done / total) * 100)}% (${done}/${total})`;
+      let done = 0;
+      statusText.textContent = `Deleting... 0/${total}`;
+
+      for (let b = 0; b < blocks.length; b++) {
+        if (isCancelling) break;
+
+        const { start: si, end: ei } = blocks[b];
+        const count = ei - si + 1;
+        const pct = Math.round((done / total) * 100);
+
+        if (count === 1) {
+          statusText.textContent = `Deleting... ${pct}% (${done}/${total})`;
+          try {
+            await browser.history.deleteUrl({ url: sorted[si].url });
+          } catch (err) {
+            console.error("deleteUrl failed", sorted[si].url, err);
+          }
+        } else {
+          const t0 = sorted[si].lastVisitTime;
+          const t1 = sorted[ei].lastVisitTime;
+          console.info("deleting range", { startTime: t0, endTime: t1, count });
+          statusText.textContent = `Deleting range of ${count}... ${pct}%`;
+          try {
+            await browser.history.deleteRange({ startTime: t0 - 1, endTime: t1 + 1 });
+          } catch (err) {
+            console.error("deleteRange failed", err, { startTime: t0, endTime: t1 });
+          }
+        }
+
+        done += count;
+        statusText.textContent = `Deleting... ${Math.round((done / total) * 100)}% (${done}/${total})`;
+      }
     }
   } finally {
     overlay.classList.remove("active");
