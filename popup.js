@@ -75,58 +75,78 @@ async function deleteSelected() {
   const checks = document.querySelectorAll(".item-check:checked");
   if (!checks.length) return;
 
-  const selectedUrls = new Set(
-    Array.from(checks).map((c) => currentItems[parseInt(c.dataset.index)]?.url).filter(Boolean)
-  );
-  if (!selectedUrls.size) return;
+  // Map checkboxes to full items via currentItems index
+  const selected = Array.from(checks)
+    .map((c) => currentItems[parseInt(c.dataset.index)])
+    .filter(Boolean);
+  if (!selected.length) return;
 
-  if (!confirm(`Delete ${selectedUrls.size} items?`)) return;
+  if (!confirm(`Delete ${selected.length} items?`)) return;
 
   isCancelling = false;
   isDeleting = true;
   overlay.classList.add("active");
 
   try {
-    const total = selectedUrls.size;
+    // Sort selection by time ascending → define time range
+    selected.sort((a, b) => a.lastVisitTime - b.lastVisitTime);
+    const selectedUrls = new Set(selected.map((x) => x.url));
+    const total = selected.length;
+    const rangeStart = selected[0].lastVisitTime;
+    const rangeEnd = selected[selected.length - 1].lastVisitTime;
 
-    // All visible selected → nuke entire time range including invisible gap items
-    if (selectedUrls.size === currentItems.length && currentItems.length > 0) {
-      const sorted = [...currentItems].sort((a, b) => a.lastVisitTime - b.lastVisitTime);
-      const t0 = sorted[0].lastVisitTime;
-      const t1 = sorted[sorted.length - 1].lastVisitTime;
-      const urls = sorted.map((x) => x.url);
-      console.info("deleting full range", { startTime: t0, endTime: t1, count: total, urls });
-      statusText.textContent = `Deleting all ${total}...`;
+    // Fetch everything in that time range with same text filter as the view
+    const query = searchInput.value;
+    statusText.textContent = "Fetching...";
+    const dbItems = await browser.history.search({
+      text: query,
+      startTime: rangeStart,
+      endTime: rangeEnd,
+      maxResults: 100000,
+    });
+
+    if (dbItems.length >= 100000) {
+      console.warn("DB fetch truncated at maxResults", rangeStart, rangeEnd);
+    }
+
+    // Sort DB result by time ascending for linear scan
+    dbItems.sort((a, b) => a.lastVisitTime - b.lastVisitTime);
+
+    if (dbItems.length === total) {
+      // Exact match: selection covers every item in time range → nuke it all
+      console.info("deleting full range (exact match)", {
+        startTime: rangeStart,
+        endTime: rangeEnd,
+        count: total,
+      });
 
       if (total === 1) {
-        // Single item: try deleteUrl first (more precise), fallback to deleteRange
+        statusText.textContent = "Deleting...";
         try {
-          await browser.history.deleteUrl({ url: urls[0] });
-          console.info("deleteUrl succeeded for", urls[0]);
+          await browser.history.deleteUrl({ url: dbItems[0].url });
+          console.info("deleteUrl succeeded for", dbItems[0].url);
         } catch (err) {
-          console.error("deleteUrl failed", urls[0], err, "→ trying deleteRange");
+          console.error("deleteUrl failed", dbItems[0].url, err, "→ trying deleteRange");
           try {
-            await browser.history.deleteRange({ startTime: t0 - 1, endTime: t1 + 1 });
+            await browser.history.deleteRange({ startTime: rangeStart - 1, endTime: rangeEnd + 1 });
           } catch (err2) {
-            console.error("deleteRange also failed", err2, { startTime: t0, endTime: t1 });
+            console.error("deleteRange also failed", err2);
           }
         }
       } else {
+        statusText.textContent = `Deleting all ${total}...`;
         try {
-          await browser.history.deleteRange({ startTime: t0 - 1, endTime: t1 + 1 });
+          await browser.history.deleteRange({ startTime: rangeStart - 1, endTime: rangeEnd + 1 });
         } catch (err) {
-          console.error("deleteRange failed", err, { startTime: t0, endTime: t1 });
+          console.error("deleteRange failed", err);
         }
       }
-      statusText.textContent = `Deleted ${total} items.`;
     } else {
-      // Selective delete: build contiguous blocks, skip unselected gaps
-      const sorted = [...currentItems].sort((a, b) => a.lastVisitTime - b.lastVisitTime);
-
+      // Partial match: dbItems has interlopers → find contiguous URL-matching blocks
       const blocks = [];
       let blockStart = -1;
-      for (let k = 0; k < sorted.length; k++) {
-        if (selectedUrls.has(sorted[k].url)) {
+      for (let k = 0; k < dbItems.length; k++) {
+        if (selectedUrls.has(dbItems[k].url)) {
           if (blockStart === -1) blockStart = k;
         } else {
           if (blockStart !== -1) {
@@ -136,9 +156,10 @@ async function deleteSelected() {
         }
       }
       if (blockStart !== -1) {
-        blocks.push({ start: blockStart, end: sorted.length - 1 });
+        blocks.push({ start: blockStart, end: dbItems.length - 1 });
       }
 
+      // Delete each contiguous block
       let done = 0;
       statusText.textContent = `Deleting... 0/${total}`;
 
@@ -150,27 +171,31 @@ async function deleteSelected() {
         const pct = Math.round((done / total) * 100);
 
         if (count === 1) {
-          statusText.textContent = `Deleting... ${pct}% (${done}/${total})`;
+          statusText.textContent = `Deleting... ${pct}%`;
           try {
-            await browser.history.deleteUrl({ url: sorted[si].url });
+            await browser.history.deleteUrl({ url: dbItems[si].url });
           } catch (err) {
-            console.error("deleteUrl failed", sorted[si].url, err);
+            console.error("deleteUrl failed", dbItems[si].url, err);
           }
         } else {
-          const t0 = sorted[si].lastVisitTime;
-          const t1 = sorted[ei].lastVisitTime;
-          console.info("deleting range", { startTime: t0, endTime: t1, count });
-          statusText.textContent = `Deleting range of ${count}... ${pct}%`;
+          const t0 = dbItems[si].lastVisitTime;
+          const t1 = dbItems[ei].lastVisitTime;
+          console.info("deleting block", { startTime: t0, endTime: t1, count });
+          statusText.textContent = `Deleting block of ${count}... ${pct}%`;
           try {
             await browser.history.deleteRange({ startTime: t0 - 1, endTime: t1 + 1 });
           } catch (err) {
-            console.error("deleteRange failed", err, { startTime: t0, endTime: t1 });
+            console.error("deleteRange failed", err);
           }
         }
 
         done += count;
-        statusText.textContent = `Deleting... ${Math.round((done / total) * 100)}% (${done}/${total})`;
+        statusText.textContent = `Deleting... ${Math.round((done / total) * 100)}%`;
       }
+    }
+
+    if (!isCancelling) {
+      statusText.textContent = `Deleted ${total} items.`;
     }
   } finally {
     overlay.classList.remove("active");
