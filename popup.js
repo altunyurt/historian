@@ -75,82 +75,64 @@ async function deleteSelected() {
   const checks = document.querySelectorAll(".item-check:checked");
   if (!checks.length) return;
 
-  // Map checkboxes back to full HistoryItem objects
-  const selectedItems = Array.from(checks)
-    .map((c) => currentItems[parseInt(c.dataset.index)])
-    .sort((a, b) => a.lastVisitTime - b.lastVisitTime); // Sort Ascending for range logic
+  const selectedUrls = new Set(
+    Array.from(checks).map((c) => currentItems[parseInt(c.dataset.index)]?.url).filter(Boolean)
+  );
+  if (!selectedUrls.size) return;
 
-  if (!confirm(`Delete ${selectedItems.length} items?`)) return;
+  if (!confirm(`Delete ${selectedUrls.size} items?`)) return;
 
   isCancelling = false;
   isDeleting = true;
   overlay.classList.add("active");
 
-  const selectedUrls = new Set(selectedItems.map((item) => item.url));
+  // Sort full visible set by time ascending — single in-memory pass, zero API calls
+  const sorted = [...currentItems].sort((a, b) => a.lastVisitTime - b.lastVisitTime);
 
-  let i = 0;
-  while (i < selectedItems.length) {
+  // Build contiguous selected blocks
+  const blocks = [];
+  let blockStart = -1;
+  for (let k = 0; k < sorted.length; k++) {
+    if (selectedUrls.has(sorted[k].url)) {
+      if (blockStart === -1) blockStart = k;
+    } else {
+      if (blockStart !== -1) {
+        blocks.push({ start: blockStart, end: k - 1 });
+        blockStart = -1;
+      }
+    }
+  }
+  if (blockStart !== -1) {
+    blocks.push({ start: blockStart, end: sorted.length - 1 });
+  }
+
+  // Delete each block
+  let done = 0;
+  for (let b = 0; b < blocks.length; b++) {
     if (isCancelling) break;
 
-    let j = i;
-    // Attempt to expand range
-    while (j + 1 < selectedItems.length) {
-      const startT = selectedItems[j].lastVisitTime;
-      const endT = selectedItems[j + 1].lastVisitTime;
+    const { start: si, end: ei } = blocks[b];
+    const count = ei - si + 1;
 
-      // Verification Step: Check the DB for unselected items in this gap
-      const gapCheck = await browser.history.search({
-        text: "",
-        startTime: startT,
-        endTime: endT,
-        maxResults: 10,
-      });
-
-      if (gapCheck.length >= 10) {
-        console.warn("gap check hit maxResults", { startT, endT, gapLen: gapCheck.length });
-      }
-
-      // Filter out items already in our selection to see if anything "alien" remains
-      const interlopers = gapCheck.filter((item) => !selectedUrls.has(item.url));
-
-      if (interlopers.length === 0) {
-        j++; // No unselected items in gap, expand range
-      } else {
-        break; // Unselected item found, stop range expansion
-      }
-    }
-
-    if (j > i) {
-      // Range is verified safe: delete the block
-      console.info("deleting range", {
-        startTime: selectedItems[i].lastVisitTime - 1,
-        endTime: selectedItems[j].lastVisitTime + 1,
-        num_items: j - i + 1,
-        urls: selectedItems.slice(i, j + 1).map((x) => x.url),
-      });
+    if (count === 1) {
       try {
-        await browser.history.deleteRange({
-          startTime: selectedItems[i].lastVisitTime - 1,
-          endTime: selectedItems[j].lastVisitTime + 1,
-        });
+        await browser.history.deleteUrl({ url: sorted[si].url });
       } catch (err) {
-        console.error("deleteRange failed", err, {
-          startTime: selectedItems[i].lastVisitTime,
-          endTime: selectedItems[j].lastVisitTime,
-        });
+        console.error("deleteUrl failed", sorted[si].url, err);
       }
-      i = j + 1;
     } else {
-      // No safe range: delete individual URL
+      const t0 = sorted[si].lastVisitTime;
+      const t1 = sorted[ei].lastVisitTime;
+      console.info("deleting range", { startTime: t0, endTime: t1, count });
       try {
-        await browser.history.deleteUrl({ url: selectedItems[i].url });
+        await browser.history.deleteRange({ startTime: t0 - 1, endTime: t1 + 1 });
       } catch (err) {
-        console.error("deleteUrl failed", selectedItems[i].url, err);
+        console.error("deleteRange failed", err, { startTime: t0, endTime: t1 });
       }
-      i++;
     }
 
-    statusText.textContent = `Processing... ${Math.round((i / selectedItems.length) * 100)}%`;
+    done += count;
+    statusText.textContent = `Processing... ${Math.round((done / selectedUrls.size) * 100)}%`;
   }
 
   overlay.classList.remove("active");
