@@ -94,12 +94,29 @@ async function deleteSelected() {
       const sorted = [...currentItems].sort((a, b) => a.lastVisitTime - b.lastVisitTime);
       const t0 = sorted[0].lastVisitTime;
       const t1 = sorted[sorted.length - 1].lastVisitTime;
-      console.info("deleting full range", { startTime: t0, endTime: t1, count: total });
+      const urls = sorted.map((x) => x.url);
+      console.info("deleting full range", { startTime: t0, endTime: t1, count: total, urls });
       statusText.textContent = `Deleting all ${total}...`;
-      try {
-        await browser.history.deleteRange({ startTime: t0 - 1, endTime: t1 + 1 });
-      } catch (err) {
-        console.error("deleteRange failed", err, { startTime: t0, endTime: t1 });
+
+      if (total === 1) {
+        // Single item: try deleteUrl first (more precise), fallback to deleteRange
+        try {
+          await browser.history.deleteUrl({ url: urls[0] });
+          console.info("deleteUrl succeeded for", urls[0]);
+        } catch (err) {
+          console.error("deleteUrl failed", urls[0], err, "→ trying deleteRange");
+          try {
+            await browser.history.deleteRange({ startTime: t0 - 1, endTime: t1 + 1 });
+          } catch (err2) {
+            console.error("deleteRange also failed", err2, { startTime: t0, endTime: t1 });
+          }
+        }
+      } else {
+        try {
+          await browser.history.deleteRange({ startTime: t0 - 1, endTime: t1 + 1 });
+        } catch (err) {
+          console.error("deleteRange failed", err, { startTime: t0, endTime: t1 });
+        }
       }
       statusText.textContent = `Deleted ${total} items.`;
     } else {
