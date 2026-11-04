@@ -47,18 +47,18 @@ main {
   margin: 0;
 }
 
-/* Update li grid for favicon */
 li {
   display: grid;
-  grid-template-columns: 30px 1fr; /* Added middle column for icon */
+  grid-template-columns: 30px 1fr; /* checkbox, text */
   padding: 8px 10px;
   gap: 10px;
   align-items: center;
 }
 
-.favicon {
-  width: 16px;
-  height: 16px;
+li.notice {
+  display: block;
+  font-size: 12px;
+  color: #666;
 }
 
 /* Deletion Indicator Overlay */
@@ -82,6 +82,23 @@ li {
   display: flex;
   flex-direction: column;
   gap: 15px;
+  max-width: 90vw;
+}
+
+#plan-output {
+  margin: 0;
+  max-height: 60vh;
+  overflow: auto;
+  text-align: left;
+  font-size: 11px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+#plan-output:empty {
+  display: none;
 }
 
 button.secondary {

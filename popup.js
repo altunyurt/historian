@@ -3,23 +3,36 @@ const dateStart = document.getElementById("date-start");
 const dateEnd = document.getElementById("date-end");
 const clearBtn = document.getElementById("clear-filters");
 const selectAll = document.getElementById("select-all");
+const iMeanIt = document.getElementById("i-mean-it");
 const historyList = document.getElementById("history-list");
 const deleteBtn = document.getElementById("delete-btn");
 const overlay = document.getElementById("loading-overlay");
 const cancelBtn = document.getElementById("cancel-delete-btn");
 const statusText = document.getElementById("status-text");
+const planOutput = document.getElementById("plan-output");
 
 let isCancelling = false;
 let isDeleting = false;
 let currentItems = [];
 let refreshId = 0; // Abort stale searches
 
+// Date inputs are "YYYY-MM-DD" and must be read as local time;
+// new Date("...") alone would parse them as UTC and shift the range.
+const dayStart = (value) => {
+  const [y, m, d] = value.split("-").map(Number);
+  return new Date(y, m - 1, d).getTime();
+};
+const dayEnd = (value) => {
+  const [y, m, d] = value.split("-").map(Number);
+  return new Date(y, m - 1, d + 1).getTime() - 1;
+};
+
 async function refreshHistory() {
   if (isDeleting) return; // Don't clobber during delete
 
   const query = searchInput.value;
-  const start = dateStart.value ? new Date(dateStart.value).getTime() : 0;
-  const end = dateEnd.value ? new Date(dateEnd.value).setHours(23, 59, 59, 999) : Date.now();
+  const start = dateStart.value ? dayStart(dateStart.value) : 0;
+  const end = dateEnd.value ? dayEnd(dateEnd.value) : Date.now();
 
   const thisId = ++refreshId;
   let items;
@@ -28,7 +41,7 @@ async function refreshHistory() {
       text: query,
       startTime: start,
       endTime: end,
-      maxResults: 1000,
+      maxResults: 1001, // one extra row reveals whether the cap was hit
     });
   } catch (err) {
     console.error("history.search failed", err);
@@ -37,11 +50,14 @@ async function refreshHistory() {
 
   if (thisId !== refreshId) return; // Stale request
 
+  const truncated = items.length > 1000;
+  if (truncated) items = items.slice(0, 1000);
   currentItems = items;
 
   const fragment = document.createDocumentFragment();
   historyList.innerHTML = "";
   selectAll.checked = false;
+  selectAll.indeterminate = false;
 
   currentItems.forEach((item, index) => {
     const li = document.createElement("li");
@@ -68,188 +84,171 @@ async function refreshHistory() {
     fragment.appendChild(li);
   });
 
+  if (truncated) {
+    const notice = document.createElement("li");
+    notice.className = "notice";
+    notice.textContent = "Showing first 1000 results — narrow the search or date range.";
+    fragment.appendChild(notice);
+  }
+
   historyList.appendChild(fragment);
+}
+
+function formatPlan(groups, singles) {
+  const lines = [`Singles (${singles.length})`];
+  singles.forEach((item) => lines.push(`  ${item.url}`));
+
+  lines.push("", `Groups (${groups.length})`);
+  groups.forEach((group) => {
+    const from = new Date(group[0].lastVisitTime).toLocaleString();
+    const to = new Date(group[group.length - 1].lastVisitTime).toLocaleString();
+    lines.push(`  [${group.length} items] ${from} → ${to}`);
+    group.forEach((row) => lines.push(`    ${row.url}`));
+  });
+
+  return lines.join("\n");
 }
 
 async function deleteSelected() {
   const checks = document.querySelectorAll(".item-check:checked");
-  if (!checks.length) return;
-
-  // Map checkboxes to full items via currentItems index
   const selected = Array.from(checks)
     .map((c) => currentItems[parseInt(c.dataset.index)])
     .filter(Boolean);
   if (!selected.length) return;
 
-  if (!confirm(`Delete ${selected.length} items?`)) return;
+  const dryRun = !iMeanIt.checked;
+  if (!dryRun && !confirm(`Delete ${selected.length} ${selected.length === 1 ? "item" : "items"}?`)) return;
 
   isCancelling = false;
   isDeleting = true;
+  cancelBtn.disabled = false;
+  cancelBtn.textContent = "Cancel";
+  planOutput.textContent = "";
   overlay.classList.add("active");
+  statusText.textContent = "Fetching...";
 
+  const total = selected.length;
+  let done = 0;
+  const failed = [];
   try {
-    // Sort selection by time ascending → define time range
-    selected.sort((a, b) => a.lastVisitTime - b.lastVisitTime);
-    const selectedUrls = new Set(selected.map((x) => x.url));
-    const total = selected.length;
-    const rangeStart = selected[0].lastVisitTime;
-    const rangeEnd = selected[selected.length - 1].lastVisitTime;
+    const selectedUrls = new Set(selected.map((item) => item.url));
+    const times = selected.map((item) => item.lastVisitTime);
+    const rangeStart = Math.min(...times);
+    const rangeEnd = Math.max(...times);
 
-    // Fetch everything in that time range with same text filter as the view
-    const query = searchInput.value;
-    statusText.textContent = "Fetching...";
-    const dbItems = await browser.history.search({
-      text: query,
-      startTime: rangeStart,
-      endTime: rangeEnd,
-      maxResults: 100000,
+    // Ground truth: the same span WITHOUT the text filter. A range delete is
+    // only safe where this list proves the window holds the selected rows and
+    // nothing else. Widening by 1ms keeps boundary rows inside search().
+    const allUrls = await browser.history.search({
+      text: "",
+      startTime: rangeStart - 1,
+      endTime: rangeEnd + 1,
+      maxResults: 100001,
     });
+    allUrls.sort((a, b) => a.lastVisitTime - b.lastVisitTime);
 
-    if (dbItems.length >= 100000) {
-      console.warn("DB fetch truncated at maxResults", rangeStart, rangeEnd);
-    }
-    console.info("deleteSelected fetch", { rangeStart, rangeEnd, total, dbLen: dbItems.length });
+    const truncated = allUrls.length > 100000;
+    if (truncated) console.warn("allUrls truncated, falling back to per-URL deletes");
 
-    // Sort DB result by time ascending for linear scan
-    dbItems.sort((a, b) => a.lastVisitTime - b.lastVisitTime);
-
-    if (dbItems.length === 0) {
-      // DB returned nothing for this range — delete individually
-      console.warn("DB fetch empty, using per-item delete", { rangeStart, rangeEnd, total });
-      for (const item of selected) {
-        if (isCancelling) break;
-        try { await browser.history.deleteUrl({ url: item.url }); }
-        catch (e) { console.error("deleteUrl failed", item.url, e); }
-        try { await browser.history.deleteRange({ startTime: item.lastVisitTime - 1, endTime: item.lastVisitTime + 1 }); }
-        catch (e) { console.error("deleteRange failed", e); }
+    // Maximal runs of consecutive selected rows in the unfiltered list.
+    // A run is only range-safe if no unselected row sits on its ±1ms boundary.
+    const groups = [];
+    let run = [];
+    let prev = null;
+    const closeRun = (next) => {
+      if (run.length >= 2) {
+        const first = run[0].lastVisitTime;
+        const last = run[run.length - 1].lastVisitTime;
+        const safe =
+          (!prev || prev.lastVisitTime < first - 1) &&
+          (!next || next.lastVisitTime > last + 1);
+        if (safe) groups.push(run);
       }
-    } else if (dbItems.length === total) {
-      // Exact match: selection covers every item in time range → nuke it all
-      console.info("deleting full range (exact match)", {
-        startTime: rangeStart,
-        endTime: rangeEnd,
-        count: total,
-      });
+      run = [];
+    };
+    if (!truncated) {
+      for (const row of allUrls) {
+        if (selectedUrls.has(row.url)) {
+          run.push(row);
+        } else {
+          closeRun(row);
+          prev = row;
+        }
+      }
+      closeRun(null);
+    }
 
-      if (total === 1) {
-        const item = dbItems[0];
-        statusText.textContent = "Deleting...";
-        console.info("deleting single", { url: item.url, time: rangeStart });
+    const grouped = new Set(groups.flat().map((row) => row.url));
+    const singles = selected.filter((item) => !grouped.has(item.url));
 
-        // Try both methods — deleteUrl may succeed without actually deleting
-        let urlErr, rangeErr;
-        try { await browser.history.deleteUrl({ url: item.url }); }
-        catch (e) { urlErr = e; }
-        try { await browser.history.deleteRange({ startTime: rangeStart - 1, endTime: rangeEnd + 1 }); }
-        catch (e) { rangeErr = e; }
+    if (dryRun) {
+      statusText.textContent = `Dry run — ${total} items would be deleted, nothing changed.`;
+      cancelBtn.textContent = "Close";
+      planOutput.textContent = formatPlan(groups, singles);
+      return;
+    }
 
-        if (urlErr) console.error("deleteUrl failed", item.url, urlErr);
-        if (rangeErr) console.error("deleteRange failed", rangeErr);
+    statusText.textContent = `Deleting... 0/${total}`;
 
-        // Verify
-        const verify = await browser.history.search({
-          text: "", startTime: rangeStart, endTime: rangeEnd, maxResults: 1,
+    for (const group of groups) {
+      if (isCancelling) break;
+      try {
+        await browser.history.deleteRange({
+          startTime: group[0].lastVisitTime - 1,
+          endTime: group[group.length - 1].lastVisitTime + 1,
         });
-        if (verify.length > 0 && verify[0].url === item.url) {
-          console.warn("ITEM SURVIVED both methods", verify[0]);
-        } else {
-          console.info("item deleted, verified");
-        }
-      } else {
-        statusText.textContent = `Deleting all ${total}...`;
-        try {
-          await browser.history.deleteRange({ startTime: rangeStart - 1, endTime: rangeEnd + 1 });
-        } catch (err) {
-          console.error("deleteRange failed", err);
-        }
+        done += group.length;
+      } catch (err) {
+        console.error("deleteRange failed", group[0].url, err);
+        for (const row of group) failed.push(row.url);
       }
-    } else {
-      // Partial match: dbItems has interlopers → find contiguous URL-matching blocks
-      const blocks = [];
-      let blockStart = -1;
-      for (let k = 0; k < dbItems.length; k++) {
-        if (selectedUrls.has(dbItems[k].url)) {
-          if (blockStart === -1) blockStart = k;
-        } else {
-          if (blockStart !== -1) {
-            blocks.push({ start: blockStart, end: k - 1 });
-            blockStart = -1;
-          }
-        }
-      }
-      if (blockStart !== -1) {
-        blocks.push({ start: blockStart, end: dbItems.length - 1 });
-      }
-
-      // Delete each contiguous block
-      let done = 0;
-      statusText.textContent = `Deleting... 0/${total}`;
-
-      for (let b = 0; b < blocks.length; b++) {
-        if (isCancelling) break;
-
-        const { start: si, end: ei } = blocks[b];
-        const count = ei - si + 1;
-        const pct = Math.round((done / total) * 100);
-
-        if (count === 1) {
-          statusText.textContent = `Deleting... ${pct}%`;
-          try {
-            await browser.history.deleteUrl({ url: dbItems[si].url });
-          } catch (err) {
-            console.error("deleteUrl failed", dbItems[si].url, err);
-          }
-        } else {
-          const t0 = dbItems[si].lastVisitTime;
-          const t1 = dbItems[ei].lastVisitTime;
-          console.info("deleting block", { startTime: t0, endTime: t1, count });
-          statusText.textContent = `Deleting block of ${count}... ${pct}%`;
-          try {
-            await browser.history.deleteRange({ startTime: t0 - 1, endTime: t1 + 1 });
-          } catch (err) {
-            console.error("deleteRange failed", err);
-          }
-        }
-
-        done += count;
-        statusText.textContent = `Deleting... ${Math.round((done / total) * 100)}%`;
-      }
-
-      // Text filter may have excluded some selected items from dbItems
-      if (done < total) {
-        const foundInDb = new Set(
-          dbItems.filter((x) => selectedUrls.has(x.url)).map((x) => x.url)
-        );
-        for (const item of selected) {
-          if (isCancelling) break;
-          if (!foundInDb.has(item.url)) {
-            console.warn("item missing from DB results, deleting individually", item.url);
-            try { await browser.history.deleteUrl({ url: item.url }); }
-            catch (e) { console.error("deleteUrl failed", item.url, e); }
-            try { await browser.history.deleteRange({ startTime: item.lastVisitTime - 1, endTime: item.lastVisitTime + 1 }); }
-            catch (e) { console.error("deleteRange failed", e); }
-            done++;
-          }
-        }
-        statusText.textContent = `Deleting... ${Math.round((done / total) * 100)}%`;
-      }
+      statusText.textContent = `Deleting... ${done}/${total}`;
     }
 
-    if (!isCancelling) {
-      statusText.textContent = `Deleted ${total} items.`;
+    for (const item of singles) {
+      if (isCancelling) break;
+      try {
+        await browser.history.deleteUrl({ url: item.url });
+        done++;
+      } catch (err) {
+        console.error("deleteUrl failed", item.url, err);
+        failed.push(item.url);
+      }
+      statusText.textContent = `Deleting... ${done}/${total}`;
     }
+  } catch (err) {
+    console.error("delete failed", err);
+    failed.push("unexpected");
+    if (dryRun) statusText.textContent = "Dry run failed — check console.";
   } finally {
-    overlay.classList.remove("active");
     isDeleting = false;
-  }
 
-  await refreshHistory();
+    if (dryRun) {
+      cancelBtn.disabled = false; // doubles as Close; overlay stays open
+    } else {
+      cancelBtn.disabled = true;
+      if (failed.length) {
+        statusText.textContent = `Deleted ${done}/${total}. ${failed.length} failed — check console.`;
+      } else if (isCancelling) {
+        statusText.textContent = `Cancelled — deleted ${done}/${total}.`;
+      } else {
+        statusText.textContent = `Deleted ${done} ${done === 1 ? "item" : "items"}.`;
+      }
+
+      await refreshHistory();
+      // Leave the result on screen long enough to read it.
+      setTimeout(() => {
+        if (!isDeleting) overlay.classList.remove("active");
+      }, 1500);
+    }
+  }
 }
 
 // Event Listeners
 cancelBtn.addEventListener("click", () => {
   isCancelling = true;
-  statusText.textContent = "Cancelling...";
+  if (isDeleting) statusText.textContent = "Cancelling...";
+  else overlay.classList.remove("active");
 });
 
 deleteBtn.addEventListener("click", deleteSelected);
@@ -271,6 +270,19 @@ clearBtn.addEventListener("click", () => {
 
 selectAll.addEventListener("change", (e) => {
   document.querySelectorAll(".item-check").forEach((c) => (c.checked = e.target.checked));
+});
+
+historyList.addEventListener("change", () => {
+  const boxes = Array.from(document.querySelectorAll(".item-check"));
+  const checked = boxes.filter((c) => c.checked).length;
+  selectAll.checked = boxes.length > 0 && checked === boxes.length;
+  selectAll.indeterminate = checked > 0 && checked < boxes.length;
+});
+
+// Other windows or "Clear recent history" should update this list too.
+browser.history.onVisitRemoved.addListener(() => {
+  clearTimeout(debounceTimer);
+  debounceTimer = setTimeout(refreshHistory, 150);
 });
 
 refreshHistory();
