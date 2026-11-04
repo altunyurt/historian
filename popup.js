@@ -94,16 +94,20 @@ async function refreshHistory() {
   historyList.appendChild(fragment);
 }
 
-function formatPlan(groups, singles) {
+function formatPlan(groups, singles, cleanup) {
+  const date = (t) => new Date(t).toLocaleString();
+  const row = (item) =>
+    `${date(item.lastVisitTime)}  ${item.id || "?"}  ${item.url}`;
+
   const lines = [`Singles (${singles.length})`];
-  singles.forEach((item) => lines.push(`  ${item.url}`));
+  singles.forEach((item) => lines.push(`  ${row(item)}`));
 
   lines.push("", `Groups (${groups.length})`);
   groups.forEach((group) => {
-    const from = new Date(group[0].lastVisitTime).toLocaleString();
-    const to = new Date(group[group.length - 1].lastVisitTime).toLocaleString();
-    lines.push(`  [${group.length} items] ${from} → ${to}`);
-    group.forEach((row) => lines.push(`    ${row.url}`));
+    lines.push(`  [${group.length} items] ${date(group[0].lastVisitTime)} → ${date(group[group.length - 1].lastVisitTime)}`);
+    group.forEach((item) =>
+      lines.push(`    ${row(item)}${cleanup.has(item.url) ? "  (also in Singles)" : ""}`)
+    );
   });
 
   return lines.join("\n");
@@ -178,13 +182,40 @@ async function deleteSelected() {
       closeRun(null);
     }
 
+    // history.search returns one row per URL and the row's lastVisitTime is the
+    // page's global last visit, so it says nothing about the page's other
+    // visits, while deleteRange removes visits only. Check the real visits of
+    // every grouped URL: any visit outside the run window means the page
+    // survives the range delete and also needs an individual deleteUrl.
+    // visit_count cannot be used as a shortcut: it excludes reload/embed visits.
+    const cleanup = new Set();
+    const checks = [];
+    for (const group of groups) {
+      const start = group[0].lastVisitTime - 1;
+      const end = group[group.length - 1].lastVisitTime + 1;
+      for (const row of group) checks.push({ url: row.url, start, end });
+    }
+    for (let i = 0; i < checks.length; i += 50) {
+      await Promise.all(
+        checks.slice(i, i + 50).map(async ({ url, start, end }) => {
+          try {
+            const visits = await browser.history.getVisits({ url });
+            if (visits.some((v) => v.visitTime < start || v.visitTime > end)) cleanup.add(url);
+          } catch (err) {
+            console.error("getVisits failed", url, err);
+            cleanup.add(url);
+          }
+        })
+      );
+    }
+
     const grouped = new Set(groups.flat().map((row) => row.url));
-    const singles = selected.filter((item) => !grouped.has(item.url));
+    const singles = selected.filter((item) => !grouped.has(item.url) || cleanup.has(item.url));
 
     if (dryRun) {
       statusText.textContent = `Dry run — ${total} items would be deleted, nothing changed.`;
       cancelBtn.textContent = "Close";
-      planOutput.textContent = formatPlan(groups, singles);
+      planOutput.textContent = formatPlan(groups, singles, cleanup);
       return;
     }
 
@@ -197,7 +228,7 @@ async function deleteSelected() {
           startTime: group[0].lastVisitTime - 1,
           endTime: group[group.length - 1].lastVisitTime + 1,
         });
-        done += group.length;
+        done += group.filter((row) => !cleanup.has(row.url)).length;
       } catch (err) {
         console.error("deleteRange failed", group[0].url, err);
         for (const row of group) failed.push(row.url);
@@ -249,6 +280,11 @@ cancelBtn.addEventListener("click", () => {
   isCancelling = true;
   if (isDeleting) statusText.textContent = "Cancelling...";
   else overlay.classList.remove("active");
+});
+
+// Esc closes the dry-run plan; a running deletion keeps going (cancel is a button).
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !isDeleting) overlay.classList.remove("active");
 });
 
 deleteBtn.addEventListener("click", deleteSelected);
