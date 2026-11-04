@@ -53,12 +53,46 @@ li {
   padding: 8px 10px;
   gap: 10px;
   align-items: center;
+  cursor: pointer;
 }
 
 li.notice {
   display: block;
   font-size: 12px;
   color: #666;
+  cursor: default;
+}
+
+#context-menu {
+  display: none;
+  position: fixed;
+  z-index: 200;
+  min-width: 160px;
+  padding: 4px 0;
+  background: #fff;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+}
+
+#context-menu.active {
+  display: block;
+}
+
+#context-menu button {
+  display: block;
+  width: 100%;
+  padding: 8px 12px;
+  border: none;
+  background: none;
+  color: #000;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+#context-menu button:hover {
+  background: #f0f0f0;
 }
 
 /* Deletion Indicator Overlay */

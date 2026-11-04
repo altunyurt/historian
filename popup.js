@@ -10,11 +10,15 @@ const overlay = document.getElementById("loading-overlay");
 const cancelBtn = document.getElementById("cancel-delete-btn");
 const statusText = document.getElementById("status-text");
 const planOutput = document.getElementById("plan-output");
+const contextMenu = document.getElementById("context-menu");
+const menuOpen = document.getElementById("menu-open");
+const menuCopy = document.getElementById("menu-copy");
 
 let isCancelling = false;
 let isDeleting = false;
 let currentItems = [];
 let refreshId = 0; // Abort stale searches
+let menuUrl = "";
 
 // Date inputs are "YYYY-MM-DD" and must be read as local time;
 // new Date("...") alone would parse them as UTC and shift the range.
@@ -61,6 +65,7 @@ async function refreshHistory() {
 
   currentItems.forEach((item, index) => {
     const li = document.createElement("li");
+    li.dataset.url = item.url;
     const checkbox = document.createElement("input");
     checkbox.type = "checkbox";
     checkbox.className = "item-check";
@@ -282,9 +287,12 @@ cancelBtn.addEventListener("click", () => {
   else overlay.classList.remove("active");
 });
 
-// Esc closes the dry-run plan; a running deletion keeps going (cancel is a button).
+// Esc closes the context menu and the dry-run plan; a running deletion keeps
+// going (cancel is a button).
 document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape" && !isDeleting) overlay.classList.remove("active");
+  if (e.key !== "Escape") return;
+  hideMenu();
+  if (!isDeleting) overlay.classList.remove("active");
 });
 
 deleteBtn.addEventListener("click", deleteSelected);
@@ -304,15 +312,72 @@ clearBtn.addEventListener("click", () => {
   refreshHistory();
 });
 
-selectAll.addEventListener("change", (e) => {
-  document.querySelectorAll(".item-check").forEach((c) => (c.checked = e.target.checked));
-});
-
-historyList.addEventListener("change", () => {
+function syncSelectAll() {
   const boxes = Array.from(document.querySelectorAll(".item-check"));
   const checked = boxes.filter((c) => c.checked).length;
   selectAll.checked = boxes.length > 0 && checked === boxes.length;
   selectAll.indeterminate = checked > 0 && checked < boxes.length;
+}
+
+selectAll.addEventListener("change", (e) => {
+  document.querySelectorAll(".item-check").forEach((c) => (c.checked = e.target.checked));
+});
+
+historyList.addEventListener("change", syncSelectAll);
+
+// Left click anywhere on a row toggles it; the checkbox keeps its own behavior.
+historyList.addEventListener("click", (e) => {
+  if (e.target.closest("input")) return;
+  const li = e.target.closest("li[data-url]");
+  if (!li) return;
+  const box = li.querySelector(".item-check");
+  box.checked = !box.checked;
+  syncSelectAll();
+});
+
+function hideMenu() {
+  contextMenu.classList.remove("active");
+  menuUrl = "";
+}
+
+historyList.addEventListener("contextmenu", (e) => {
+  const li = e.target.closest("li[data-url]");
+  if (!li) return;
+  e.preventDefault();
+  menuUrl = li.dataset.url;
+  contextMenu.classList.add("active");
+  const left = Math.min(e.clientX, window.innerWidth - contextMenu.offsetWidth - 4);
+  const top = Math.min(e.clientY, window.innerHeight - contextMenu.offsetHeight - 4);
+  contextMenu.style.left = `${Math.max(4, left)}px`;
+  contextMenu.style.top = `${Math.max(4, top)}px`;
+});
+
+// Right click anywhere else closes this menu (and leaves the browser's own).
+document.addEventListener("contextmenu", (e) => {
+  if (!e.target.closest("li[data-url]")) hideMenu();
+});
+
+document.addEventListener("click", (e) => {
+  if (!contextMenu.contains(e.target)) hideMenu();
+});
+
+document.addEventListener("scroll", hideMenu, true);
+
+menuOpen.addEventListener("click", () => {
+  if (menuUrl) {
+    browser.tabs.create({ url: menuUrl }).catch((err) => console.error("tabs.create failed", err));
+  }
+  hideMenu();
+});
+
+menuCopy.addEventListener("click", async () => {
+  const url = menuUrl;
+  hideMenu();
+  try {
+    await navigator.clipboard.writeText(url);
+  } catch (err) {
+    console.error("clipboard write failed", err);
+  }
 });
 
 // Other windows or "Clear recent history" should update this list too.

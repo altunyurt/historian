@@ -10,7 +10,7 @@
       }
     }
   },
-  "permissions": ["history"],
+  "permissions": ["history", "clipboardWrite"],
   "sidebar_action": {
     "default_panel": "popup.html",
     "default_title": "Historian the History Manager",
