@@ -6,6 +6,8 @@ const selectAll = document.getElementById("select-all");
 const iMeanIt = document.getElementById("i-mean-it");
 const historyList = document.getElementById("history-list");
 const deleteBtn = document.getElementById("delete-btn");
+const deleteAllBtn = document.getElementById("delete-all-btn");
+const matchInfo = document.getElementById("match-info");
 const overlay = document.getElementById("loading-overlay");
 const cancelBtn = document.getElementById("cancel-delete-btn");
 const statusText = document.getElementById("status-text");
@@ -19,6 +21,14 @@ let isDeleting = false;
 let currentItems = [];
 let refreshId = 0; // Abort stale searches
 let menuUrl = "";
+let truncated = false;
+let renderedCount = 0;
+let sentinel = null;
+let sentinelObserver = null;
+
+const HARD_CAP = 100000; // shortcut: sidebar memory guard (~30-50MB); upgrade = stream deletes beyond it
+const RENDER_BATCH = 500;
+const PLAN_ROWS = 50;
 
 // Date inputs are "YYYY-MM-DD" and must be read as local time;
 // new Date("...") alone would parse them as UTC and shift the range.
@@ -30,6 +40,63 @@ const dayEnd = (value) => {
   const [y, m, d] = value.split("-").map(Number);
   return new Date(y, m - 1, d + 1).getTime() - 1;
 };
+
+function makeRow(item, index) {
+  const li = document.createElement("li");
+  li.dataset.url = item.url;
+  const checkbox = document.createElement("input");
+  checkbox.type = "checkbox";
+  checkbox.className = "item-check";
+  checkbox.dataset.index = index;
+
+  const textDiv = document.createElement("div");
+  textDiv.className = "text-content";
+
+  const titleSpan = document.createElement("span");
+  titleSpan.className = "title";
+  titleSpan.textContent = item.title || "No Title";
+
+  const urlSpan = document.createElement("span");
+  urlSpan.className = "url";
+  urlSpan.textContent = item.url;
+
+  textDiv.appendChild(titleSpan);
+  textDiv.appendChild(urlSpan);
+  li.appendChild(checkbox);
+  li.appendChild(textDiv);
+  return li;
+}
+
+function renderNextBatch() {
+  if (!sentinel) return;
+  const end = Math.min(renderedCount + RENDER_BATCH, currentItems.length);
+  const fragment = document.createDocumentFragment();
+  for (let i = renderedCount; i < end; i++) fragment.appendChild(makeRow(currentItems[i], i));
+  historyList.insertBefore(fragment, sentinel);
+  renderedCount = end;
+  if (renderedCount >= currentItems.length) {
+    sentinelObserver.disconnect();
+    sentinel.remove();
+    sentinel = null;
+  }
+}
+
+function updateMatchInfo() {
+  const n = currentItems.length;
+  if (!n) {
+    matchInfo.textContent = "No matches.";
+    return;
+  }
+  matchInfo.textContent = truncated
+    ? "100,000 of 100,000+ matches — narrow the search or date range to get the rest."
+    : `${n.toLocaleString()} match${n === 1 ? "" : "es"}.`;
+}
+
+function updateDeleteAllBtn() {
+  const n = currentItems.length;
+  deleteAllBtn.disabled = n === 0;
+  deleteAllBtn.textContent = `Delete All ${n.toLocaleString()}`;
+}
 
 async function refreshHistory() {
   if (isDeleting) return; // Don't clobber during delete
@@ -45,7 +112,7 @@ async function refreshHistory() {
       text: query,
       startTime: start,
       endTime: end,
-      maxResults: 1001, // one extra row reveals whether the cap was hit
+      maxResults: HARD_CAP + 1, // one extra row reveals whether the cap was hit
     });
   } catch (err) {
     console.error("history.search failed", err);
@@ -54,49 +121,27 @@ async function refreshHistory() {
 
   if (thisId !== refreshId) return; // Stale request
 
-  const truncated = items.length > 1000;
-  if (truncated) items = items.slice(0, 1000);
+  truncated = items.length > HARD_CAP;
+  if (truncated) items = items.slice(0, HARD_CAP);
   currentItems = items;
 
-  const fragment = document.createDocumentFragment();
   historyList.innerHTML = "";
   selectAll.checked = false;
   selectAll.indeterminate = false;
+  renderedCount = 0;
 
-  currentItems.forEach((item, index) => {
-    const li = document.createElement("li");
-    li.dataset.url = item.url;
-    const checkbox = document.createElement("input");
-    checkbox.type = "checkbox";
-    checkbox.className = "item-check";
-    checkbox.dataset.index = index;
-
-    const textDiv = document.createElement("div");
-    textDiv.className = "text-content";
-
-    const titleSpan = document.createElement("span");
-    titleSpan.className = "title";
-    titleSpan.textContent = item.title || "No Title";
-
-    const urlSpan = document.createElement("span");
-    urlSpan.className = "url";
-    urlSpan.textContent = item.url;
-
-    textDiv.appendChild(titleSpan);
-    textDiv.appendChild(urlSpan);
-    li.appendChild(checkbox);
-    li.appendChild(textDiv);
-    fragment.appendChild(li);
+  if (sentinelObserver) sentinelObserver.disconnect();
+  sentinel = document.createElement("li");
+  sentinel.id = "sentinel";
+  historyList.appendChild(sentinel);
+  sentinelObserver = new IntersectionObserver((entries) => {
+    if (entries.some((e) => e.isIntersecting)) renderNextBatch();
   });
+  sentinelObserver.observe(sentinel);
+  renderNextBatch();
 
-  if (truncated) {
-    const notice = document.createElement("li");
-    notice.className = "notice";
-    notice.textContent = "Showing first 1000 results — narrow the search or date range.";
-    fragment.appendChild(notice);
-  }
-
-  historyList.appendChild(fragment);
+  updateMatchInfo();
+  updateDeleteAllBtn();
 }
 
 function formatPlan(groups, singles, cleanup) {
@@ -105,15 +150,20 @@ function formatPlan(groups, singles, cleanup) {
     `${date(item.lastVisitTime)}  ${item.id || "?"}  ${item.url}`;
 
   const lines = [`Singles (${singles.length})`];
-  singles.forEach((item) => lines.push(`  ${row(item)}`));
+  singles.slice(0, PLAN_ROWS).forEach((item) => lines.push(`  ${row(item)}`));
+  if (singles.length > PLAN_ROWS) lines.push(`  … ${singles.length - PLAN_ROWS} more`);
 
   lines.push("", `Groups (${groups.length})`);
-  groups.forEach((group) => {
+  groups.slice(0, PLAN_ROWS).forEach((group) => {
     lines.push(`  [${group.length} items] ${date(group[0].lastVisitTime)} → ${date(group[group.length - 1].lastVisitTime)}`);
-    group.forEach((item) =>
-      lines.push(`    ${row(item)}${cleanup.has(item.url) ? "  (also in Singles)" : ""}`)
-    );
+    group
+      .slice(0, PLAN_ROWS)
+      .forEach((item) =>
+        lines.push(`    ${row(item)}${cleanup.has(item.url) ? "  (also in Singles)" : ""}`)
+      );
+    if (group.length > PLAN_ROWS) lines.push(`    … ${group.length - PLAN_ROWS} more`);
   });
+  if (groups.length > PLAN_ROWS) lines.push(`  … ${groups.length - PLAN_ROWS} more groups`);
 
   return lines.join("\n");
 }
@@ -123,10 +173,21 @@ async function deleteSelected() {
   const selected = Array.from(checks)
     .map((c) => currentItems[parseInt(c.dataset.index)])
     .filter(Boolean);
+  await runDelete(selected);
+}
+
+async function deleteAllMatches() {
+  if (!currentItems.length) return;
+  let msg = `Delete ${currentItems.length.toLocaleString()} items?`;
+  if (truncated) msg += " More matches exist beyond the 100,000 limit — narrow the search to delete them too.";
+  await runDelete(currentItems, msg);
+}
+
+async function runDelete(selected, confirmMessage) {
   if (!selected.length) return;
 
   const dryRun = !iMeanIt.checked;
-  if (!dryRun && !confirm(`Delete ${selected.length} ${selected.length === 1 ? "item" : "items"}?`)) return;
+  if (!dryRun && !confirm(confirmMessage || `Delete ${selected.length} ${selected.length === 1 ? "item" : "items"}?`)) return;
 
   isCancelling = false;
   isDeleting = true;
@@ -142,8 +203,9 @@ async function deleteSelected() {
   try {
     const selectedUrls = new Set(selected.map((item) => item.url));
     const times = selected.map((item) => item.lastVisitTime);
-    const rangeStart = Math.min(...times);
-    const rangeEnd = Math.max(...times);
+    // reduce, not spread: 100k args to Math.min can overflow the call stack
+    const rangeStart = times.reduce((a, b) => Math.min(a, b));
+    const rangeEnd = times.reduce((a, b) => Math.max(a, b));
 
     // Ground truth: the same span WITHOUT the text filter. A range delete is
     // only safe where this list proves the window holds the selected rows and
@@ -152,12 +214,12 @@ async function deleteSelected() {
       text: "",
       startTime: rangeStart - 1,
       endTime: rangeEnd + 1,
-      maxResults: 100001,
+      maxResults: HARD_CAP + 1,
     });
     allUrls.sort((a, b) => a.lastVisitTime - b.lastVisitTime);
 
-    const truncated = allUrls.length > 100000;
-    if (truncated) console.warn("allUrls truncated, falling back to per-URL deletes");
+    const allUrlsTruncated = allUrls.length > HARD_CAP;
+    if (allUrlsTruncated) console.warn("allUrls truncated, falling back to per-URL deletes");
 
     // Maximal runs of consecutive selected rows in the unfiltered list.
     // A run is only range-safe if no unselected row sits on its ±1ms boundary.
@@ -175,7 +237,7 @@ async function deleteSelected() {
       }
       run = [];
     };
-    if (!truncated) {
+    if (!allUrlsTruncated) {
       for (const row of allUrls) {
         if (selectedUrls.has(row.url)) {
           run.push(row);
@@ -241,15 +303,19 @@ async function deleteSelected() {
       statusText.textContent = `Deleting... ${done}/${total}`;
     }
 
-    for (const item of singles) {
+    for (let i = 0; i < singles.length; i += 50) {
       if (isCancelling) break;
-      try {
-        await browser.history.deleteUrl({ url: item.url });
-        done++;
-      } catch (err) {
-        console.error("deleteUrl failed", item.url, err);
-        failed.push(item.url);
-      }
+      await Promise.all(
+        singles.slice(i, i + 50).map(async (item) => {
+          try {
+            await browser.history.deleteUrl({ url: item.url });
+            done++;
+          } catch (err) {
+            console.error("deleteUrl failed", item.url, err);
+            failed.push(item.url);
+          }
+        })
+      );
       statusText.textContent = `Deleting... ${done}/${total}`;
     }
   } catch (err) {
@@ -296,6 +362,7 @@ document.addEventListener("keydown", (e) => {
 });
 
 deleteBtn.addEventListener("click", deleteSelected);
+deleteAllBtn.addEventListener("click", deleteAllMatches);
 
 let debounceTimer;
 [searchInput, dateStart, dateEnd].forEach((el) => {
