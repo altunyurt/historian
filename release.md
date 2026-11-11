@@ -8,6 +8,7 @@
 - Select All + Delete Selected warns when more matches exist beyond the cap.
 - Single-URL deletes run in parallel batches of 50, so large deletes finish in minutes instead of tens of minutes.
 - **I mean it** is replaced by a **Dry Run** checkbox: checked = plan only, nothing deleted; unchecked = real delete after a confirm.
+- The search field has an ✕ button that clears the text.
 
 ## 1.2
 

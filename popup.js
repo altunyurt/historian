@@ -6,6 +6,7 @@ const selectAll = document.getElementById("select-all");
 const dryRunBox = document.getElementById("dry-run");
 const historyList = document.getElementById("history-list");
 const deleteBtn = document.getElementById("delete-btn");
+const searchClear = document.getElementById("search-clear");
 const matchInfo = document.getElementById("match-info");
 const overlay = document.getElementById("loading-overlay");
 const cancelBtn = document.getElementById("cancel-delete-btn");
@@ -358,9 +359,21 @@ document.addEventListener("keydown", (e) => {
 
 deleteBtn.addEventListener("click", deleteSelected);
 
+function syncSearchClear() {
+  searchClear.classList.toggle("visible", searchInput.value.length > 0);
+}
+
+searchClear.addEventListener("click", () => {
+  searchInput.value = "";
+  syncSearchClear();
+  searchInput.focus();
+  refreshHistory();
+});
+
 let debounceTimer;
 [searchInput, dateStart, dateEnd].forEach((el) => {
   el.addEventListener("input", () => {
+    syncSearchClear();
     clearTimeout(debounceTimer);
     debounceTimer = setTimeout(refreshHistory, 150);
   });
@@ -370,6 +383,7 @@ clearBtn.addEventListener("click", () => {
   searchInput.value = "";
   dateStart.value = "";
   dateEnd.value = "";
+  syncSearchClear();
   refreshHistory();
 });
 

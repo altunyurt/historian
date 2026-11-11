@@ -28,9 +28,34 @@ header {
   align-items: center;
 }
 
-#search-input {
+#search-input-wrap {
+  position: relative;
   flex: 1;
-  padding: 6px;
+}
+
+#search-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 26px 6px 6px;
+}
+
+#search-clear {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  border: none;
+  background: none;
+  padding: 0;
+  font-size: 14px;
+  line-height: 1;
+  color: #666;
+  cursor: pointer;
+  display: none;
+}
+
+#search-clear.visible {
+  display: block;
 }
 input[type="date"] {
   padding: 4px;

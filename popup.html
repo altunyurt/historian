@@ -7,7 +7,10 @@
   <body>
     <header>
       <div class="search-row">
-        <input type="text" id="search-input" placeholder="Search history..." />
+        <div id="search-input-wrap">
+          <input type="text" id="search-input" placeholder="Search history..." />
+          <button id="search-clear" aria-label="Clear search">✕</button>
+        </div>
         <button id="delete-btn" class="danger">Delete Selected</button>
       </div>
       <div class="filter-row">
