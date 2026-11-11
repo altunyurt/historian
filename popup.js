@@ -3,7 +3,7 @@ const dateStart = document.getElementById("date-start");
 const dateEnd = document.getElementById("date-end");
 const clearBtn = document.getElementById("clear-filters");
 const selectAll = document.getElementById("select-all");
-const iMeanIt = document.getElementById("i-mean-it");
+const dryRunBox = document.getElementById("dry-run");
 const historyList = document.getElementById("history-list");
 const deleteBtn = document.getElementById("delete-btn");
 const matchInfo = document.getElementById("match-info");
@@ -181,7 +181,7 @@ async function deleteSelected() {
 async function runDelete(selected, confirmMessage) {
   if (!selected.length) return;
 
-  const dryRun = !iMeanIt.checked;
+  const dryRun = dryRunBox.checked;
   if (!dryRun && !confirm(confirmMessage || `Delete ${selected.length} ${selected.length === 1 ? "item" : "items"}?`)) return;
 
   isCancelling = false;
