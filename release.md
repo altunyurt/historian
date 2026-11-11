@@ -1,6 +1,6 @@
 # Release notes
 
-## Unreleased
+## 1.3
 
 - Result cap raised 1000 → 100,000; the list renders in 500-row batches as you scroll.
 - **Select All** covers every match, including rows not yet rendered; Delete Selected then removes them all.
