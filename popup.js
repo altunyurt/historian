@@ -6,7 +6,6 @@ const selectAll = document.getElementById("select-all");
 const iMeanIt = document.getElementById("i-mean-it");
 const historyList = document.getElementById("history-list");
 const deleteBtn = document.getElementById("delete-btn");
-const deleteAllBtn = document.getElementById("delete-all-btn");
 const matchInfo = document.getElementById("match-info");
 const overlay = document.getElementById("loading-overlay");
 const cancelBtn = document.getElementById("cancel-delete-btn");
@@ -25,6 +24,8 @@ let truncated = false;
 let renderedCount = 0;
 let sentinel = null;
 let sentinelObserver = null;
+let selectAllMode = false; // Select All covers every match, including unrendered rows
+const excluded = new Set(); // indices deselected while Select All is on
 
 const HARD_CAP = 100000; // shortcut: sidebar memory guard (~30-50MB); upgrade = stream deletes beyond it
 const RENDER_BATCH = 500;
@@ -48,6 +49,7 @@ function makeRow(item, index) {
   checkbox.type = "checkbox";
   checkbox.className = "item-check";
   checkbox.dataset.index = index;
+  checkbox.checked = selectAllMode && !excluded.has(index);
 
   const textDiv = document.createElement("div");
   textDiv.className = "text-content";
@@ -92,12 +94,6 @@ function updateMatchInfo() {
     : `${n.toLocaleString()} match${n === 1 ? "" : "es"}.`;
 }
 
-function updateDeleteAllBtn() {
-  const n = currentItems.length;
-  deleteAllBtn.disabled = n === 0;
-  deleteAllBtn.textContent = `Delete All ${n.toLocaleString()}`;
-}
-
 async function refreshHistory() {
   if (isDeleting) return; // Don't clobber during delete
 
@@ -128,6 +124,8 @@ async function refreshHistory() {
   historyList.innerHTML = "";
   selectAll.checked = false;
   selectAll.indeterminate = false;
+  selectAllMode = false;
+  excluded.clear();
   renderedCount = 0;
 
   if (sentinelObserver) sentinelObserver.disconnect();
@@ -141,7 +139,6 @@ async function refreshHistory() {
   renderNextBatch();
 
   updateMatchInfo();
-  updateDeleteAllBtn();
 }
 
 function formatPlan(groups, singles, cleanup) {
@@ -169,18 +166,16 @@ function formatPlan(groups, singles, cleanup) {
 }
 
 async function deleteSelected() {
-  const checks = document.querySelectorAll(".item-check:checked");
-  const selected = Array.from(checks)
-    .map((c) => currentItems[parseInt(c.dataset.index)])
-    .filter(Boolean);
-  await runDelete(selected);
-}
-
-async function deleteAllMatches() {
-  if (!currentItems.length) return;
-  let msg = `Delete ${currentItems.length.toLocaleString()} items?`;
-  if (truncated) msg += " More matches exist beyond the 100,000 limit — narrow the search to delete them too.";
-  await runDelete(currentItems, msg);
+  const selected = selectAllMode
+    ? currentItems.filter((_, i) => !excluded.has(i))
+    : Array.from(document.querySelectorAll(".item-check:checked"))
+        .map((c) => currentItems[parseInt(c.dataset.index)])
+        .filter(Boolean);
+  let msg;
+  if (selectAllMode && truncated) {
+    msg = `Delete ${selected.length.toLocaleString()} items? More matches exist beyond the 100,000 limit — narrow the search to delete them too.`;
+  }
+  await runDelete(selected, msg);
 }
 
 async function runDelete(selected, confirmMessage) {
@@ -362,7 +357,6 @@ document.addEventListener("keydown", (e) => {
 });
 
 deleteBtn.addEventListener("click", deleteSelected);
-deleteAllBtn.addEventListener("click", deleteAllMatches);
 
 let debounceTimer;
 [searchInput, dateStart, dateEnd].forEach((el) => {
@@ -382,15 +376,30 @@ clearBtn.addEventListener("click", () => {
 function syncSelectAll() {
   const boxes = Array.from(document.querySelectorAll(".item-check"));
   const checked = boxes.filter((c) => c.checked).length;
-  selectAll.checked = boxes.length > 0 && checked === boxes.length;
-  selectAll.indeterminate = checked > 0 && checked < boxes.length;
+  const total = selectAllMode ? currentItems.length : boxes.length;
+  const selected = selectAllMode ? currentItems.length - excluded.size : checked;
+  selectAll.checked = total > 0 && selected === total;
+  selectAll.indeterminate = selected > 0 && selected < total;
+}
+
+function onBoxToggled(box) {
+  if (selectAllMode) {
+    const idx = parseInt(box.dataset.index);
+    if (box.checked) excluded.delete(idx);
+    else excluded.add(idx);
+  }
+  syncSelectAll();
 }
 
 selectAll.addEventListener("change", (e) => {
-  document.querySelectorAll(".item-check").forEach((c) => (c.checked = e.target.checked));
+  selectAllMode = e.target.checked;
+  excluded.clear();
+  document.querySelectorAll(".item-check").forEach((c) => (c.checked = selectAllMode));
 });
 
-historyList.addEventListener("change", syncSelectAll);
+historyList.addEventListener("change", (e) => {
+  if (e.target.classList.contains("item-check")) onBoxToggled(e.target);
+});
 
 // Left click anywhere on a row toggles it; the checkbox keeps its own behavior.
 historyList.addEventListener("click", (e) => {
@@ -399,7 +408,7 @@ historyList.addEventListener("click", (e) => {
   if (!li) return;
   const box = li.querySelector(".item-check");
   box.checked = !box.checked;
-  syncSelectAll();
+  onBoxToggled(box);
 });
 
 function hideMenu() {

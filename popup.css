@@ -193,11 +193,6 @@ button.danger {
   border-radius: 4px;
   cursor: pointer;
 }
-
-button.danger:disabled {
-  background: #999;
-  cursor: not-allowed;
-}
 #clear-filters {
   cursor: pointer;
 }

@@ -3,8 +3,9 @@
 ## Unreleased
 
 - Result cap raised 1000 → 100,000; the list renders in 500-row batches as you scroll.
-- New **Delete All** button deletes every match (up to the 100,000 cap) in one run.
-- Delete All reports the true match count and warns when more matches exist beyond the cap.
+- **Select All** covers every match, including rows not yet rendered; Delete Selected then removes them all.
+- Rows unchecked after Select All are kept; the header checkbox shows the partial state.
+- Select All + Delete Selected warns when more matches exist beyond the cap.
 - Single-URL deletes run in parallel batches of 50, so large deletes finish in minutes instead of tens of minutes.
 
 ## 1.2
